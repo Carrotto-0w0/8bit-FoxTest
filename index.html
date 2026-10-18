@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Fox Girl – 8-bit Platformer</title>
+<style>
+:root{--bg:#0a0c1e;--fg:#ffd7ef;--accent:#ff4fa3}
+@media (prefers-color-scheme:dark){:root{--bg:#0a0c1e;--fg:#ffd7ef}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:"Courier New",monospace}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:env(safe-area-inset-top,0) 8px env(safe-area-inset-bottom,0)}
+h1{margin:0;font-size:18px;letter-spacing:2px;color:var(--accent)}
+canvas{width:min(100%,960px);aspect-ratio:640/352;image-rendering:pixelated;border:3px solid var(--accent);border-radius:8px;background:#000}
+.help{font-size:12px;opacity:.85;text-align:center;line-height:1.5}
+.pad{display:none;gap:10px;width:min(100%,960px);justify-content:space-between}
+.pad div{display:flex;gap:10px}
+.pad button{width:68px;height:56px;font:bold 20px monospace;background:#1b1f45;color:var(--fg);border:2px solid var(--accent);border-radius:10px}
+.pad button:active{background:var(--accent);color:#000}
+@media (pointer:coarse){.pad{display:flex}.help{display:none}}
+</style></head><body>
+<h1>🦊 FOX GIRL · 8-BIT</h1>
+<canvas id="c" width="640" height="352"></canvas>
+<div class="help">A / D = เดิน · ← / → = วิ่ง · SPACE = กระโดด · R = เริ่มใหม่ · เหยียบสไลม์เพื่อกำจัด เก็บเหรียญ ไปให้ถึงธง!</div>
+<div class="pad"><div><button data-k="KL">◀◀</button><button data-k="KR">▶▶</button></div><div><button data-k="L">◀</button><button data-k="R">▶</button><button data-k="J">⤒</button></div></div>
+<script>
+const SPR={cw:80,ch:103,anims:{idle:{row:0,n:12},walk:{row:1,n:12},run:{row:2,n:10},jump:{row:3,n:11},fall:{row:4,n:7},land:{row:5,n:8}}};
+const IMG=new Image();IMG.src="assets/fox_sprites.png";
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const T=32,W=640,H=352,SC=0.66; // tile, view, sprite scale
+// ---------- level ----------
+const COLS=84,ROWS=11,solid=new Set();
+const gaps=[[14,16],[30,33],[47,49],[62,65]];
+for(let x=0;x<COLS;x++){if(gaps.some(([a,b])=>x>=a&&x<=b))continue;solid.add(x+',9');solid.add(x+',10');}
+[[8,6,3],[18,6,3],[21,4,3],[27,6,2],[34,6,3],[38,5,2],[42,7,3],[51,6,3],[55,4,3],[59,6,2],[67,6,3],[71,5,3]].forEach(([x,y,w])=>{for(let i=0;i<w;i++)solid.add((x+i)+','+y)});
+[[24,8],[25,8],[26,8],[25,7],[26,7],[26,6]].forEach(([x,y])=>solid.add(x+','+y)); // small hill
+const isSolid=(c,r)=>c<0||c>=COLS?true:solid.has(c+','+r);
+const coins=[[9,5],[10,5],[19,5],[22,3],[23,3],[28,5],[35,5],[36,5],[39,4],[43,6],[44,6],[52,5],[56,3],[57,3],[60,5],[68,5],[72,4],[73,4],[15,6],[31,6],[48,6],[63,6]].map(([x,y])=>({x:x*T+16,y:y*T+16,got:false}));
+const slimes0=[[11,9,6],[20,9,3],[36,9,3],[44,9,3],[53,9,5],[69,9,5]];
+const GOAL={x:80*T,y:9*T};
+let player,slimes,hearts,score,state,cam,t=0,shake=0;
+function reset(){player={x:60,y:200,w:24,h:56,vx:0,vy:0,face:1,ground:false,anim:'idle',f:0,ft:0,land:0,inv:0,air:0};
+ slimes=slimes0.map(([x,y,r])=>({x:x*T,y:y*T-20,w:26,h:20,vx:-30,min:(x-r/2)*T,max:(x+r/2)*T,dead:0}));
+ coins.forEach(c=>c.got=false);hearts=3;score=0;state='play';cam=0;}
+reset();
+// ---------- input ----------
+const K={};addEventListener('keydown',e=>{K[e.code]=true;if(['Space','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code))e.preventDefault();if(e.code==='KeyR')reset();});
+addEventListener('keyup',e=>K[e.code]=false);
+document.querySelectorAll('.pad button').forEach(b=>{const k=b.dataset.k,m={L:'KeyA',R:'KeyD',KL:'ArrowLeft',KR:'ArrowRight',J:'Space'}[k];
+ const on=e=>{e.preventDefault();K[m]=true;if(state!=='play')reset()},off=e=>{e.preventDefault();K[m]=false};
+ b.addEventListener('touchstart',on,{passive:false});b.addEventListener('touchend',off);b.addEventListener('touchcancel',off);b.addEventListener('mousedown',on);b.addEventListener('mouseup',off);});
+// ---------- physics ----------
+function moveBox(o,dx,dy){let hit={x:0,y:0};
+ o.x+=dx;let x0=Math.floor(o.x/T),x1=Math.floor((o.x+o.w-.01)/T),y0=Math.floor(o.y/T),y1=Math.floor((o.y+o.h-.01)/T);
+ for(let c=x0;c<=x1;c++)for(let r=y0;r<=y1;r++)if(isSolid(c,r)){if(dx>0)o.x=c*T-o.w;else if(dx<0)o.x=(c+1)*T;hit.x=1;x0=Math.floor(o.x/T);x1=Math.floor((o.x+o.w-.01)/T);}
+ o.y+=dy;x0=Math.floor(o.x/T);x1=Math.floor((o.x+o.w-.01)/T);y0=Math.floor(o.y/T);y1=Math.floor((o.y+o.h-.01)/T);
+ for(let c=x0;c<=x1;c++)for(let r=y0;r<=y1;r++)if(isSolid(c,r)){if(dy>0){o.y=r*T-o.h;hit.y=1}else if(dy<0){o.y=(r+1)*T;hit.y=-1}y0=Math.floor(o.y/T);y1=Math.floor((o.y+o.h-.01)/T);}
+ return hit;}
+function hurt(){if(player.inv>0)return;hearts--;player.inv=1.5;shake=.25;player.vy=-300;player.vx=-player.face*160;if(hearts<=0)state='over';}
+function setAnim(a){if(player.anim!==a){player.anim=a;player.f=0;player.ft=0;}}
+function update(dt){t+=dt;const p=player;if(state!=='play'){if(K.Space||K.Enter)reset();return;}
+ const walk=(K.KeyA?-1:0)+(K.KeyD?1:0),run=(K.ArrowLeft?-1:0)+(K.ArrowRight?1:0);
+ let dir=run||walk,sp=run?215:walk?125:0;
+ const target=dir*sp,acc=p.ground?1500:900;
+ p.vx+= Math.sign(target-p.vx)*Math.min(Math.abs(target-p.vx),acc*dt);
+ if(dir)p.face=dir;
+ if((K.Space||K.ArrowUp||K.KeyW)&&p.ground){p.vy=-610;p.ground=false;p.land=0;}
+ if(!(K.Space||K.ArrowUp||K.KeyW)&&p.vy<-220)p.vy=-220; // variable jump
+ p.vy=Math.min(p.vy+1800*dt,900);
+ const wasAir=!p.ground,prevVy=p.vy;
+ const hx=moveBox(p,p.vx*dt,0);if(hx.x)p.vx=0;
+ const hy=moveBox(p,0,p.vy*dt);p.ground=false;
+ if(hy.y===1){p.ground=true;p.vy=0;if(wasAir&&prevVy>250)p.land=.34;}else if(hy.y===-1)p.vy=0;
+ p.x=Math.max(0,p.x);p.inv=Math.max(0,p.inv-dt);p.land=Math.max(0,p.land-dt);
+ if(p.y>H+80){hearts--;shake=.3;if(hearts<=0)state='over';else{p.x=Math.max(60,Math.floor(p.x/T/20)*T*20-0);p.x=60;p.y=200;p.vx=p.vy=0;p.inv=1.5;}}
+ // animation
+ let a;if(!p.ground)a=p.vy<0?'jump':'fall';else if(p.land>0)a='land';else if(Math.abs(p.vx)>150)a='run';else if(Math.abs(p.vx)>20)a='walk';else a='idle';
+ setAnim(a);const A=SPR.anims[a],fps={idle:9,walk:15,run:17,jump:20,fall:12,land:26}[a];p.ft+=dt*fps;
+ if(a==='jump'||a==='land')p.f=Math.min(A.n-1,Math.floor(p.ft));else p.f=Math.floor(p.ft)%A.n;
+ // coins
+ coins.forEach(c=>{if(!c.got&&Math.hypot(c.x-(p.x+p.w/2),c.y-(p.y+p.h/2))<26){c.got=true;score++;}});
+ // slimes
+ slimes.forEach(s=>{if(s.dead){s.dead-=dt;return;}s.x+=s.vx*dt;if(s.x<s.min||s.x+s.w>s.max)s.vx*=-1;
+  if(p.x<s.x+s.w&&p.x+p.w>s.x&&p.y<s.y+s.h&&p.y+p.h>s.y){if(p.vy>80&&p.y+p.h-s.y<24){s.dead=.4;p.vy=-420;score+=2;}else hurt();}});
+ if(p.x+p.w>GOAL.x)state='win';
+ cam=Math.max(0,Math.min(COLS*T-W,p.x+p.w/2-W/2));shake=Math.max(0,shake-dt);}
+// ---------- drawing ----------
+function px(c,x,y,w,h){g.fillStyle=c;g.fillRect(Math.round(x),Math.round(y),w,h);}
+function bg(){const gr=g.createLinearGradient(0,0,0,H);gr.addColorStop(0,'#4aa8f0');gr.addColorStop(1,'#bfe6ff');g.fillStyle=gr;g.fillRect(0,0,W,H);
+ for(let i=0;i<6;i++){const x=((i*230-cam*.15+1500)%1500)-120,y=30+(i%3)*28;px('#fff',x,y,64,14);px('#fff',x+10,y-10,40,12);px('#e6f4ff',x,y+14,64,4);}
+ [[.3,'#5f7fc4',150,70],[.5,'#3f66a8',110,60]].forEach(([s,c,hh,wd],k)=>{g.fillStyle=c;for(let i=-1;i<12;i++){const x=i*wd*2-((cam*s)%(wd*2))+k*40,b=H-96;g.beginPath();g.moveTo(x,b);g.lineTo(x+wd,b-hh+k*20);g.lineTo(x+wd*2,b);g.fill();}});
+ px('#2f7a3a',0,H-96,W,96);}
+function tile(c,r){const x=c*T-cam,y=r*T;if(x<-T||x>W)return;const top=!isSolid(c,r-1)||!solid.has(c+','+(r-1));
+ px('#8a5a2b',x,y,T,T);for(let i=0;i<5;i++)px('#6b4220',x+((i*11+c*7)%26),y+8+((i*7+r*5)%20),4,3);px('#a8743a',x+((c*13)%22),y+14,3,3);
+ if(top){px('#4cc03e',x,y,T,9);px('#2f8f2c',x,y+7,T,3);for(let i=0;i<T;i+=8)px('#86e05a',x+i,y,4,2);}
+ px('#5a3818',x,y+T-2,T,2);}
+function drawPlayer(){const p=player;if(p.inv>0&&Math.floor(t*14)%2)return;const A=SPR.anims[p.anim];if(!IMG.complete)return;
+ const sw=SPR.cw*SC,sh=SPR.ch*SC,cx=p.x+p.w/2-cam,by=p.y+p.h+2;
+ g.save();g.translate(Math.round(cx),Math.round(by));g.scale(p.face,1);g.imageSmoothingEnabled=true;
+ g.fillStyle='rgba(0,0,0,.18)';g.beginPath();g.ellipse(0,-1,14,4,0,0,7);g.fill();
+ g.drawImage(IMG,p.f*SPR.cw,A.row*SPR.ch,SPR.cw,SPR.ch,-sw/2,-sh,sw,sh);g.restore();}
+function drawSlime(s){const x=s.x-cam,y=s.y,sq=s.dead?.4:1,b=Math.sin(t*8+s.x)*2;if(x<-40||x>W+40)return;
+ const h=(s.h+b)*sq;px('#3d8fe0',x,y+s.h-h,s.w,h);px('#6fc0ff',x+3,y+s.h-h+2,s.w-6,4);px('#2a64b0',x,y+s.h-3,s.w,3);
+ if(!s.dead){px('#fff',x+6,y+s.h-h+8,5,5);px('#fff',x+16,y+s.h-h+8,5,5);px('#124',x+8,y+s.h-h+10,2,3);px('#124',x+18,y+s.h-h+10,2,3);}}
+function drawCoin(c){if(c.got)return;const x=c.x-cam,w=Math.abs(Math.cos(t*4+c.x))*10+2,y=c.y+Math.sin(t*3+c.x)*3;if(x<-20||x>W+20)return;
+ px('#a86d00',x-w/2-1,y-10,w+2,20);px('#ffd23c',x-w/2,y-9,w,18);px('#fff2a0',x-w/2+1,y-7,Math.max(1,w/3),8);}
+function hud(){for(let i=0;i<3;i++){const x=12+i*26,c=i<hearts?'#ff3d7f':'#3a2a4a';px(c,x+2,8,6,6);px(c,x+12,8,6,6);px(c,x,12,20,6);px(c,x+2,18,16,4);px(c,x+6,22,8,3);}
+ px('#ffd23c',W-80,10,12,12);g.fillStyle='#fff';g.font='bold 16px monospace';g.fillText('x '+score+'/'+coins.length,W-62,21);}
+function msg(a,b,col){g.fillStyle='rgba(10,12,30,.78)';g.fillRect(120,110,400,120);g.strokeStyle=col;g.lineWidth=3;g.strokeRect(120,110,400,120);g.textAlign='center';g.fillStyle=col;g.font='bold 28px monospace';g.fillText(a,320,158);g.fillStyle='#fff';g.font='14px monospace';g.fillText(b,320,190);g.fillText('กด SPACE / R เพื่อเริ่มใหม่',320,214);g.textAlign='left';}
+function draw(){g.save();if(shake>0)g.translate((Math.random()-.5)*5,(Math.random()-.5)*5);g.imageSmoothingEnabled=false;bg();
+ const c0=Math.floor(cam/T);for(let c=c0;c<=c0+W/T+1;c++)for(let r=0;r<ROWS;r++)if(solid.has(c+','+r))tile(c,r);
+ // goal flag
+ const fx=GOAL.x-24-cam;px('#ddd',fx,GOAL.y-120,4,120);px('#ff4fa3',fx+4,GOAL.y-120,30,20);px('#fff',fx+10,GOAL.y-114,8,8);
+ coins.forEach(drawCoin);slimes.forEach(drawSlime);drawPlayer();hud();
+ if(state==='win')msg('STAGE CLEAR!','เก็บเหรียญได้ '+score+'/'+coins.length,'#ffd23c');
+ if(state==='over')msg('GAME OVER','สู้ใหม่อีกครั้งนะ!','#ff4fa3');g.restore();}
+let last=performance.now();(function loop(n){const dt=Math.min(.033,(n-last)/1000);last=n;update(dt);draw();requestAnimationFrame(loop)})(last);
+</script></body></html>
