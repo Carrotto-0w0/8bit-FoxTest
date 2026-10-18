@@ -1,0 +1,1 @@
+{"cw": 80, "ch": 99, "anims": {"idle": {"row": 0, "n": 12}, "walk": {"row": 1, "n": 12}, "run": {"row": 2, "n": 10}, "jump": {"row": 3, "n": 11}, "fall": {"row": 4, "n": 7}, "land": {"row": 5, "n": 8}}}
